@@ -200,8 +200,8 @@ You can modify these settings in `app/scraper.py`:
 
 ```python
 self.timeout = 30           # Request timeout in seconds
-self.max_pages = 3          # Maximum pagination depth
-self.max_scrolls = 3        # Maximum scroll iterations
+self.max_pages = 5          # Maximum pagination depth
+self.max_scrolls = 5        # Maximum scroll iterations
 ```
 
 ## Troubleshooting
