@@ -1,24 +1,3 @@
-# #!/bin/bash
-   
-#    # Create virtual environment if it doesn't exist
-#    if [ ! -d "venv" ]; then
-#        python3 -m venv venv
-#    fi
-   
-#    # Activate virtual environment
-#    source venv/bin/activate
-   
-#    # Install dependencies
-#    pip install -r requirements.txt
-   
-#    # Install Playwright browsers
-#    playwright install chromium
-   
-#    # Start the server
-#    uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-
-
 #!/bin/bash
 
 echo "=========================================="
@@ -70,5 +49,17 @@ echo ""
 echo "Press Ctrl+C to stop the server"
 echo ""
 
-# Start the server
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Start the server with Windows event loop fix
+# Use Python to set event loop policy before starting uvicorn
+python -c "
+import sys
+import platform
+import asyncio
+
+if platform.system() == 'Windows':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    print('✓ Windows event loop policy configured')
+
+import uvicorn
+uvicorn.run('app.main:app', host='0.0.0.0', port=8000, reload=True, loop='asyncio')
+"

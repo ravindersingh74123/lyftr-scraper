@@ -1,3 +1,15 @@
+import sys
+import platform
+
+# CRITICAL: Must be set BEFORE any async operations
+if platform.system() == 'Windows':
+    import asyncio
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        print("✓ Windows event loop policy set in scraper.py")
+    except:
+        pass
+
 import httpx
 import asyncio
 from datetime import datetime, timezone
@@ -5,7 +17,6 @@ from urllib.parse import urljoin, urlparse
 from typing import Dict, List, Optional
 import logging
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-import sys
 
 from app.parser import HTMLParser
 
@@ -17,21 +28,10 @@ class UniversalScraper:
         self.timeout = 30  # seconds
         self.max_pages = 5
         self.max_scrolls = 5
-        self.playwright_available = self._check_playwright()
-        
-    def _check_playwright(self) -> bool:
-        """Check if Playwright is available and working"""
-        try:
-            # On Windows with certain Python versions, Playwright may not work
-            if sys.platform == 'win32':
-                logger.info("Windows detected - Playwright may have limitations")
-            return True
-        except:
-            logger.warning("Playwright check failed")
-            return False
+        self.playwright_available = True
         
     async def scrape(self, url: str) -> Dict:
-        """Main scraping orchestrator"""
+        """Main scraping orchestrator with improved JS detection"""
         errors = []
         interactions = {
             "clicks": [],
@@ -47,7 +47,7 @@ class UniversalScraper:
             logger.info(f"Static HTML fetched: {len(html)} characters")
             
             # Check if we need JS rendering
-            needs_js = self._needs_js_rendering(html)
+            needs_js = self._needs_js_rendering(html, url)
             has_static_pagination = self._detect_static_pagination(html, url)
             
             logger.info(f"Analysis: needs_js={needs_js}, has_static_pagination={has_static_pagination}")
@@ -91,12 +91,12 @@ class UniversalScraper:
             result["interactions"] = interactions
             result["errors"] = errors
             
-            # Add strategy info (helps with evaluation)
+            # Add strategy info
             if "meta" not in result:
                 result["meta"] = {}
             result["meta"]["strategy"] = strategy
             
-            # Validate result meets requirements
+            # Validate result
             self._validate_result(result)
             
             return result
@@ -108,11 +108,10 @@ class UniversalScraper:
                 "phase": "scrape"
             })
             
-            # Return minimal valid response even on error
             return self._create_error_response(url, str(e), interactions, errors)
     
     def _validate_result(self, result: Dict):
-        """Validate that result meets all requirements for Stage 2"""
+        """Validate that result meets all requirements"""
         assert "url" in result, "Missing required field: url"
         assert "scrapedAt" in result, "Missing required field: scrapedAt"
         assert "meta" in result, "Missing required field: meta"
@@ -130,17 +129,10 @@ class UniversalScraper:
                 break
         assert has_content, "At least one section must have non-empty content.text"
         
-        # Check links are absolute URLs
-        for section in result["sections"]:
-            for link in section.get("content", {}).get("links", []):
-                href = link.get("href", "")
-                if href and not href.startswith(("http://", "https://")):
-                    logger.warning(f"Found relative URL: {href}")
-        
         logger.info("✓ Result validation passed")
     
     def _create_error_response(self, url: str, error_msg: str, interactions: Dict, errors: List) -> Dict:
-        """Create a valid error response that still meets requirements"""
+        """Create a valid error response"""
         return {
             "url": url,
             "scrapedAt": datetime.now(timezone.utc).isoformat(),
@@ -171,183 +163,50 @@ class UniversalScraper:
             "errors": errors
         }
     
-    def _detect_static_pagination(self, html: str, url: str) -> bool:
-        """Detect if the page has pagination links that can be followed with static requests"""
-        from selectolax.parser import HTMLParser as SelectolaxParser
-        
-        tree = SelectolaxParser(html)
-        
-        # Look for common pagination patterns
-        pagination_selectors = [
-            'a.next',
-            'li.next a',
-            'a[rel="next"]',
-            '.pagination a',
-            '.pager a',
-        ]
-        
-        for selector in pagination_selectors:
-            elements = tree.css(selector)
-            if elements:
-                logger.info(f"Static pagination detected via selector: {selector}")
-                return True
-        
-        # Check URL patterns
-        url_lower = url.lower()
-        if any(pattern in url_lower for pattern in ['/page-', '/page/', '?page=']):
-            logger.info(f"Static pagination detected via URL pattern")
-            return True
-        
-        return False
-    
-    async def _static_paginate(self, base_url: str, first_html: str, interactions: Dict) -> List[str]:
-        """Follow pagination links using static HTTP requests"""
-        from selectolax.parser import HTMLParser as SelectolaxParser
-        
-        html_pages = [first_html]
-        current_url = base_url
-        pages_visited = 1
-        
-        logger.info(f"Static pagination starting from {base_url}")
-        
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            while pages_visited < self.max_pages:
-                # Parse current HTML to find next link
-                tree = SelectolaxParser(html_pages[-1])
-                
-                # Try to find next page link
-                next_href = None
-                
-                # Try different selectors
-                selectors = [
-                    'li.next a',
-                    'a.next',
-                    'a[rel="next"]',
-                    '.pagination a',
-                    'a.morelink',  # Hacker News
-                ]
-                
-                for selector in selectors:
-                    elements = tree.css(selector)
-                    for element in elements:
-                        href = element.attributes.get('href')
-                        if href:
-                            # Check if it's not a previous link
-                            text = element.text().lower()
-                            if 'prev' not in text and 'previous' not in text:
-                                next_href = href
-                                logger.info(f"Found next link: {href} (selector: {selector})")
-                                break
-                    if next_href:
-                        break
-                
-                if not next_href:
-                    logger.info("No more pagination links found")
-                    break
-                
-                # Build absolute URL
-                absolute_url = urljoin(current_url, next_href)
-                
-                # Check if already visited
-                if absolute_url in interactions["pages"]:
-                    logger.info(f"Already visited {absolute_url}")
-                    break
-                
-                try:
-                    logger.info(f"Fetching page {pages_visited + 1}: {absolute_url}")
-                    response = await client.get(absolute_url, headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    })
-                    response.raise_for_status()
-                    
-                    page_html = response.text
-                    html_pages.append(page_html)
-                    interactions["pages"].append(absolute_url)
-                    
-                    logger.info(f"✓ Page {pages_visited + 1} fetched ({len(page_html)} chars)")
-                    
-                    current_url = absolute_url
-                    pages_visited += 1
-                    
-                    # Small delay to be respectful
-                    await asyncio.sleep(0.5)
-                    
-                except Exception as e:
-                    logger.error(f"Failed to fetch {absolute_url}: {str(e)}")
-                    break
-        
-        logger.info(f"Static pagination complete: {len(html_pages)} pages collected")
-        return html_pages
-    
-    def _parse_and_merge_pages(self, html_pages: List[str], base_url: str) -> Dict:
-        """Parse multiple HTML pages and merge their sections"""
-        if not html_pages:
-            raise ValueError("No HTML pages to parse")
-        
-        logger.info(f"Parsing {len(html_pages)} HTML page(s)...")
-        
-        # Parse first page to get base structure
-        result = self.parser.parse(html_pages[0], base_url)
-        logger.info(f"Page 1 parsed: {len(result.get('sections', []))} sections")
-        
-        # If only one page, return as-is
-        if len(html_pages) == 1:
-            return result
-        
-        # Parse and merge additional pages
-        all_sections = result["sections"]
-        
-        for i, html in enumerate(html_pages[1:], start=1):
-            try:
-                logger.info(f"Parsing page {i+1}...")
-                page_result = self.parser.parse(html, base_url)
-                logger.info(f"Page {i+1} parsed: {len(page_result.get('sections', []))} sections")
-                
-                # Merge sections from this page
-                for section in page_result["sections"]:
-                    # Update section ID to avoid conflicts
-                    original_id = section["id"]
-                    section["id"] = f"{original_id}-page{i+1}"
-                    section["label"] = f"{section['label']} (Page {i+1})"
-                    all_sections.append(section)
-                
-                logger.info(f"✓ Merged {len(page_result['sections'])} sections from page {i+1}")
-            except Exception as e:
-                logger.error(f"Failed to parse page {i+1}: {str(e)}", exc_info=True)
-        
-        result["sections"] = all_sections
-        logger.info(f"Total sections after merging: {len(all_sections)}")
-        
-        return result
-    
-    async def _try_static_scrape(self, url: str) -> tuple[str, str]:
-        """Attempt static HTML fetch"""
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-                response = await client.get(url, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                })
-                response.raise_for_status()
-                return response.text, "static"
-        except Exception as e:
-            logger.error(f"Static scrape failed: {str(e)}")
-            raise
-    
-    def _needs_js_rendering(self, html: str) -> bool:
+    def _needs_js_rendering(self, html: str, url: str = "") -> bool:
         """
-        Heuristic to determine if JS rendering is needed.
-        Returns True if the page appears to be JS-heavy or has minimal content.
+        Enhanced heuristic to determine if JS rendering is needed.
         """
         html_lower = html.lower()
+        url_lower = url.lower()
+        
+        # Check URL patterns that indicate JS-heavy sites
+        js_url_patterns = [
+            '/scroll',  # Infinite scroll pages
+            '/js',      # JS demo pages
+            'ajax',     # AJAX content
+        ]
+        
+        # Force JS rendering for known JS-heavy URL patterns
+        if any(pattern in url_lower for pattern in js_url_patterns):
+            logger.info(f"Needs JS: URL pattern detected ({url})")
+            return True
         
         # Check for JS framework markers
         js_markers = [
             'data-reactroot', 'data-react-helmet',
             '__next', '_next/static',
-            'id="__nuxt"', 'ng-app', 'v-app'
+            'id="__nuxt"', 'ng-app', 'v-app',
+            'data-vue-', 'v-cloak',
         ]
         
         has_js_framework = any(marker in html_lower for marker in js_markers)
+        
+        # Check for infinite scroll indicators
+        infinite_scroll_indicators = [
+            'infinite-scroll',
+            'infinite_scroll',
+            'data-infinite',
+            'scroll-container',
+            'lazy-load',
+            'data-scroll',
+        ]
+        
+        has_infinite_scroll = any(indicator in html_lower for indicator in infinite_scroll_indicators)
+        
+        if has_infinite_scroll:
+            logger.info(f"Needs JS: Infinite scroll detected in HTML")
+            return True
         
         # Check for body content
         body_start = html_lower.find('<body')
@@ -376,66 +235,206 @@ class UniversalScraper:
             logger.info(f"Needs JS: JS framework detected with limited content")
             return True
         
+        logger.info(f"Static sufficient: {text_length} chars")
         return False
     
+    def _detect_static_pagination(self, html: str, url: str) -> bool:
+        """Detect if the page has pagination links"""
+        from selectolax.parser import HTMLParser as SelectolaxParser
+        
+        tree = SelectolaxParser(html)
+        
+        pagination_selectors = [
+            'a.next',
+            'li.next a',
+            'a[rel="next"]',
+            '.pagination a',
+            '.pager a',
+        ]
+        
+        for selector in pagination_selectors:
+            elements = tree.css(selector)
+            if elements:
+                logger.info(f"Static pagination detected via selector: {selector}")
+                return True
+        
+        url_lower = url.lower()
+        if any(pattern in url_lower for pattern in ['/page-', '/page/', '?page=']):
+            logger.info(f"Static pagination detected via URL pattern")
+            return True
+        
+        return False
+    
+    async def _static_paginate(self, base_url: str, first_html: str, interactions: Dict) -> List[str]:
+        """Follow pagination links using static HTTP requests"""
+        from selectolax.parser import HTMLParser as SelectolaxParser
+        
+        html_pages = [first_html]
+        current_url = base_url
+        pages_visited = 1
+        
+        logger.info(f"Static pagination starting from {base_url}")
+        
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            while pages_visited < self.max_pages:
+                tree = SelectolaxParser(html_pages[-1])
+                next_href = None
+                
+                selectors = [
+                    'li.next a',
+                    'a.next',
+                    'a[rel="next"]',
+                    '.pagination a',
+                    'a.morelink',
+                ]
+                
+                for selector in selectors:
+                    elements = tree.css(selector)
+                    for element in elements:
+                        href = element.attributes.get('href')
+                        if href:
+                            text = element.text().lower()
+                            if 'prev' not in text and 'previous' not in text:
+                                next_href = href
+                                logger.info(f"Found next link: {href}")
+                                break
+                    if next_href:
+                        break
+                
+                if not next_href:
+                    logger.info("No more pagination links found")
+                    break
+                
+                absolute_url = urljoin(current_url, next_href)
+                
+                if absolute_url in interactions["pages"]:
+                    logger.info(f"Already visited {absolute_url}")
+                    break
+                
+                try:
+                    logger.info(f"Fetching page {pages_visited + 1}: {absolute_url}")
+                    response = await client.get(absolute_url, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    })
+                    response.raise_for_status()
+                    
+                    page_html = response.text
+                    html_pages.append(page_html)
+                    interactions["pages"].append(absolute_url)
+                    
+                    logger.info(f"✓ Page {pages_visited + 1} fetched ({len(page_html)} chars)")
+                    
+                    current_url = absolute_url
+                    pages_visited += 1
+                    
+                    await asyncio.sleep(0.5)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to fetch {absolute_url}: {str(e)}")
+                    break
+        
+        logger.info(f"Static pagination complete: {len(html_pages)} pages collected")
+        return html_pages
+    
+    def _parse_and_merge_pages(self, html_pages: List[str], base_url: str) -> Dict:
+        """Parse multiple HTML pages and merge their sections"""
+        if not html_pages:
+            raise ValueError("No HTML pages to parse")
+        
+        logger.info(f"Parsing {len(html_pages)} HTML page(s)...")
+        
+        result = self.parser.parse(html_pages[0], base_url)
+        logger.info(f"Page 1 parsed: {len(result.get('sections', []))} sections")
+        
+        if len(html_pages) == 1:
+            return result
+        
+        all_sections = result["sections"]
+        
+        for i, html in enumerate(html_pages[1:], start=1):
+            try:
+                logger.info(f"Parsing page {i+1}...")
+                page_result = self.parser.parse(html, base_url)
+                logger.info(f"Page {i+1} parsed: {len(page_result.get('sections', []))} sections")
+                
+                for section in page_result["sections"]:
+                    original_id = section["id"]
+                    section["id"] = f"{original_id}-page{i+1}"
+                    section["label"] = f"{section['label']} (Page {i+1})"
+                    all_sections.append(section)
+                
+                logger.info(f"✓ Merged {len(page_result['sections'])} sections from page {i+1}")
+            except Exception as e:
+                logger.error(f"Failed to parse page {i+1}: {str(e)}", exc_info=True)
+        
+        result["sections"] = all_sections
+        logger.info(f"Total sections after merging: {len(all_sections)}")
+        
+        return result
+    
+    async def _try_static_scrape(self, url: str) -> tuple[str, str]:
+        """Attempt static HTML fetch"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+                response = await client.get(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                response.raise_for_status()
+                return response.text, "static"
+        except Exception as e:
+            logger.error(f"Static scrape failed: {str(e)}")
+            raise
+    
     async def _js_scrape(self, url: str) -> tuple[List[str], Dict]:
-        """Scrape using Playwright for JS-rendered content"""
+        """Scrape using Playwright via subprocess (Windows fix)"""
+        import subprocess
+        import json
+        
         interactions = {
             "clicks": [],
             "scrolls": 0,
             "pages": [url]
         }
         
-        html_pages = []
-        
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            )
-            page = await context.new_page()
+        try:
+            # Run Playwright in separate process with correct event loop
+            logger.info("Running Playwright in subprocess (Windows compatibility)")
             
-            try:
-                # Navigate to URL
-                logger.info(f"JS: Navigating to {url}")
-                await page.goto(url, wait_until='domcontentloaded', timeout=self.timeout * 1000)
-                
-                # Wait for network to be idle
-                try:
-                    await page.wait_for_load_state('networkidle', timeout=10000)
-                except:
-                    logger.info("Network idle timeout, continuing")
-                
-                # Wait for any delayed JS
-                await asyncio.sleep(2)
-                
-                # Remove noise
-                await self._remove_noise(page)
-                
-                # Handle clicks (for tabs, "load more", etc.)
-                await self._handle_clicks(page, interactions)
-                
-                # Get HTML from first page
-                html_pages.append(await page.content())
-                logger.info(f"JS: Captured page 1 ({len(html_pages[0])} chars)")
-                
-                # Handle scrolling/pagination
-                additional_pages = await self._handle_scroll_pagination(page, interactions)
-                html_pages.extend(additional_pages)
-                
-                logger.info(f"JS: Total pages collected: {len(html_pages)}")
-                
-                await browser.close()
-                return html_pages, interactions
-                
-            except Exception as e:
-                logger.error(f"JS scraping error: {str(e)}", exc_info=True)
-                await browser.close()
-                raise
+            result = subprocess.run(
+                [sys.executable, "app/playwright_helper.py", url, str(self.max_scrolls)],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode != 0:
+                raise Exception(f"Playwright subprocess failed: {result.stderr}")
+            
+            # Parse result
+            data = json.loads(result.stdout)
+            
+            if not data.get("success"):
+                raise Exception(data.get("error", "Unknown error"))
+            
+            html_pages = data["html_pages"]
+            interactions.update(data["interactions"])
+            
+            logger.info(f"Playwright subprocess: {len(html_pages)} pages, {interactions['scrolls']} scrolls")
+            
+            return html_pages, interactions
+            
+        except subprocess.TimeoutExpired:
+            logger.error("Playwright subprocess timeout")
+            raise Exception("Playwright timeout")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Playwright output: {e}")
+            raise Exception("Failed to parse Playwright result")
+        except Exception as e:
+            logger.error(f"Playwright subprocess error: {str(e)}")
+            raise
     
     async def _remove_noise(self, page):
-        """Remove common noise elements like cookie banners"""
+        """Remove common noise elements"""
         noise_selectors = [
             '[class*="cookie"]', '[id*="cookie"]',
             '[class*="gdpr"]', '[class*="consent"]',
@@ -457,7 +456,6 @@ class UniversalScraper:
     
     async def _handle_clicks(self, page, interactions: Dict):
         """Handle clicking tabs or 'Load more' buttons"""
-        # Try clicking tabs
         tab_selectors = [
             '[role="tab"]:not([aria-selected="true"])',
             'button[aria-selected="false"]',
@@ -503,7 +501,6 @@ class UniversalScraper:
         pages_visited = 1
         html_pages = []
         
-        # Site-specific: Hacker News
         if 'news.ycombinator.com' in page.url:
             return await self._handle_hackernews_pagination(page, interactions)
         
@@ -513,7 +510,6 @@ class UniversalScraper:
         ]
         
         while pages_visited < self.max_pages:
-            next_link = None
             next_href = None
             
             for selector in pagination_selectors:
@@ -589,17 +585,78 @@ class UniversalScraper:
         return html_pages
     
     async def _handle_infinite_scroll(self, page, interactions: Dict):
-        """Handle infinite scroll"""
+        """
+        Enhanced infinite scroll handler
+        """
+        logger.info("Starting infinite scroll handling...")
+        
+        # Get initial content count
+        try:
+            initial_count = await page.evaluate('''() => {
+                return document.querySelectorAll('div.quote, .quote, article, .item').length;
+            }''')
+            logger.info(f"Initial element count: {initial_count}")
+        except:
+            initial_count = 0
+        
+        scrolls_performed = 0
+        no_change_count = 0
+        
         for i in range(self.max_scrolls):
             try:
+                # Get current state
                 prev_height = await page.evaluate('document.body.scrollHeight')
+                
+                logger.info(f"Scroll {i+1}: Current height={prev_height}")
+                
+                # Scroll to bottom
                 await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-                interactions["scrolls"] += 1
-                await asyncio.sleep(2)
+                scrolls_performed += 1
                 
+                # Wait for content to load
+                await asyncio.sleep(3)  # Increased wait time
+                
+                # Additional wait for network
+                try:
+                    await page.wait_for_load_state('networkidle', timeout=5000)
+                except:
+                    pass
+                
+                # Check if height changed
                 new_height = await page.evaluate('document.body.scrollHeight')
-                if new_height == prev_height:
-                    break
                 
-            except:
+                # Count elements again
+                try:
+                    new_count = await page.evaluate('''() => {
+                        return document.querySelectorAll('div.quote, .quote, article, .item').length;
+                    }''')
+                    elements_added = new_count - initial_count
+                    logger.info(f"After scroll {i+1}: height={new_height}, elements={new_count} (+{elements_added})")
+                except:
+                    new_count = initial_count
+                    elements_added = 0
+                
+                # Check if content was added
+                height_changed = new_height > prev_height
+                elements_changed = new_count > initial_count
+                
+                if not height_changed and not elements_changed:
+                    no_change_count += 1
+                    logger.info(f"No change detected (count: {no_change_count})")
+                    
+                    if no_change_count >= 2:
+                        logger.info("No new content after 2 attempts, stopping scroll")
+                        break
+                else:
+                    no_change_count = 0
+                    logger.info(f"✓ New content loaded (height: {prev_height}→{new_height}, elements: {initial_count}→{new_count})")
+                    initial_count = new_count
+                
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logger.warning(f"Scroll {i+1} failed: {str(e)}")
                 break
+        
+        interactions["scrolls"] = scrolls_performed
+        logger.info(f"Infinite scroll complete: {scrolls_performed} scrolls performed")

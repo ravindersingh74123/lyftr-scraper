@@ -350,7 +350,7 @@ async def root():
                         type="text" 
                         id="urlInput" 
                         placeholder="Enter URL (e.g., https://example.com)"
-                        value="https://books.toscrape.com/catalogue/page-1.html"
+                        value="https://quotes.toscrape.com/scroll"
                     >
                     <button onclick="scrapeUrl()" id="scrapeBtn">Scrape</button>
                 </div>
@@ -428,11 +428,9 @@ async def root():
             }
             
             function displayResults(result) {
-                // Get strategy and format badge
                 const strategy = result.meta.strategy || 'unknown';
                 const strategyBadge = `<span class="strategy-badge ${strategy}">${strategy}</span>`;
                 
-                // Display meta information with strategy
                 const metaHtml = `
                     <h3>📄 Page Metadata</h3>
                     <div class="meta-item"><strong>Title:</strong> ${result.meta.title || 'N/A'}</div>
@@ -444,7 +442,6 @@ async def root():
                 `;
                 document.getElementById('metaInfo').innerHTML = metaHtml;
                 
-                // Display stats
                 const statsHtml = `
                     <div class="stat-card">
                         <div class="stat-value">${result.sections.length}</div>
@@ -465,7 +462,6 @@ async def root():
                 `;
                 document.getElementById('stats').innerHTML = statsHtml;
                 
-                // Display sections
                 const sectionsHtml = result.sections.map((section, index) => `
                     <div class="section">
                         <div class="section-header" onclick="toggleSection(${index})">
@@ -502,7 +498,6 @@ async def root():
                 URL.revokeObjectURL(url);
             }
             
-            // Allow Enter key to submit
             document.getElementById('urlInput').addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     scrapeUrl();
