@@ -30,8 +30,13 @@ class UniversalScraper:
         self.max_scrolls = 5
         self.playwright_available = True
         
+    """
+Complete working scrape() method for app/scraper.py
+Replace the entire scrape() method with this version
+"""
+
     async def scrape(self, url: str) -> Dict:
-        """Main scraping orchestrator with improved JS detection"""
+        """Main scraping orchestrator with improved error handling"""
         errors = []
         interactions = {
             "clicks": [],
@@ -39,45 +44,102 @@ class UniversalScraper:
             "pages": [url]
         }
         
+        html = None
+        strategy = "unknown"
+        static_failed = False
+        static_error = None
+        js_error = None
+        
         try:
             # Try static scraping first
             logger.info(f"Attempting static scrape for {url}")
-            html, strategy = await self._try_static_scrape(url)
             
-            logger.info(f"Static HTML fetched: {len(html)} characters")
+            try:
+                html, strategy = await self._try_static_scrape(url)
+                logger.info(f"Static HTML fetched: {len(html)} characters")
+            except Exception as e:
+                static_error = e
+                static_error_msg = str(e)
+                logger.warning(f"Static scrape failed: {static_error_msg}")
+                static_failed = True
+                
+                # Categorize the error
+                error_type = type(e).__name__
+                if "401" in static_error_msg or "Unauthorized" in static_error_msg:
+                    error_category = "Authentication required"
+                elif "403" in static_error_msg or "Forbidden" in static_error_msg:
+                    error_category = "Access forbidden"
+                elif "404" in static_error_msg:
+                    error_category = "Page not found"
+                elif "ConnectError" in error_type:
+                    error_category = "Connection failed"
+                elif "Timeout" in error_type:
+                    error_category = "Request timeout"
+                else:
+                    error_category = error_type
+                
+                errors.append({
+                    "message": f"{error_category}: {static_error_msg}",
+                    "phase": "static-fetch",
+                    "type": error_type
+                })
             
-            # Check if we need JS rendering
-            needs_js = self._needs_js_rendering(html, url)
-            has_static_pagination = self._detect_static_pagination(html, url)
-            
-            logger.info(f"Analysis: needs_js={needs_js}, has_static_pagination={has_static_pagination}")
-            
-            # Strategy decision tree
-            if needs_js and not has_static_pagination:
-                # True JS-heavy site - try Playwright
-                logger.info("JS-heavy content detected, attempting Playwright")
+            # If static failed or we need JS rendering
+            if static_failed or (html and self._needs_js_rendering(html, url)):
+                if static_failed:
+                    logger.info(f"Static scraping failed, forcing Playwright")
+                else:
+                    logger.info(f"JS rendering needed, attempting Playwright")
+                
                 try:
                     all_html_pages, js_interactions = await self._js_scrape(url)
-                    strategy = "js"
+                    strategy = "js" if not static_failed else "js-forced"
                     interactions.update(js_interactions)
+                    
+                    logger.info(f"Playwright succeeded: {len(all_html_pages)} pages")
+                    
                 except Exception as e:
-                    logger.warning(f"Playwright failed: {str(e)}, falling back to static")
-                    # Fallback to static if Playwright fails
-                    all_html_pages = [html]
-                    strategy = "static-fallback"
-                    errors.append({
-                        "message": f"JS rendering attempted but failed: {str(e)}",
-                        "phase": "js-fallback"
-                    })
-            elif has_static_pagination:
-                # Static site with pagination - use httpx pagination
-                logger.info("Static pagination detected, using httpx")
-                all_html_pages = await self._static_paginate(url, html, interactions)
-                strategy = "static-paginated"
+                    js_error = e
+                    logger.error(f"Playwright also failed: {str(e)}")
+                    
+                    # If we have static HTML from earlier, use it as last resort
+                    if html and not static_failed:
+                        logger.info("Falling back to static HTML despite JS detection")
+                        all_html_pages = [html]
+                        strategy = "static-fallback"
+                        errors.append({
+                            "message": f"JS rendering failed: {str(js_error)}",
+                            "phase": "js-fallback"
+                        })
+                    else:
+                        # Total failure - can't get any HTML
+                        logger.error(f"Complete failure - no HTML available")
+                        errors.append({
+                            "message": f"All scraping methods failed",
+                            "phase": "complete-failure"
+                        })
+                        
+                        # Determine which error to show
+                        final_error = static_error if static_error else js_error
+                        error_msg = str(final_error) if final_error else "Unknown error"
+                        
+                        return self._create_error_response(
+                            url, 
+                            error_msg,
+                            interactions, 
+                            errors
+                        )
             else:
-                # Simple static site
-                strategy = "static"
-                all_html_pages = [html]
+                # Static HTML is sufficient
+                has_pagination = self._detect_static_pagination(html, url)
+                
+                if has_pagination:
+                    logger.info("Static pagination detected, using httpx")
+                    all_html_pages = await self._static_paginate(url, html, interactions)
+                    strategy = "static-paginated"
+                else:
+                    strategy = "static"
+                    all_html_pages = [html]
             
             logger.info(f"Strategy: {strategy}, Pages collected: {len(all_html_pages)}")
             
@@ -372,19 +434,76 @@ class UniversalScraper:
         
         return result
     
-    async def _try_static_scrape(self, url: str) -> tuple[str, str]:
-        """Attempt static HTML fetch"""
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-                response = await client.get(url, headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                })
-                response.raise_for_status()
-                return response.text, "static"
-        except Exception as e:
-            logger.error(f"Static scrape failed: {str(e)}")
-            raise
     
+    async def _try_static_scrape(self, url: str) -> tuple[str, str]:
+        """
+        Attempt static HTML fetch with better error handling
+        Returns (html, strategy) or raises exception
+        """
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+        
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, 
+                follow_redirects=True,
+                verify=True  # Verify SSL certificates
+            ) as client:
+                response = await client.get(url, headers=headers)
+                
+                # Check status code
+                if response.status_code == 401:
+                    raise Exception(f"Authentication required (401). Site requires login or API key.")
+                elif response.status_code == 403:
+                    raise Exception(f"Access forbidden (403). Site may be blocking automated requests.")
+                elif response.status_code == 404:
+                    raise Exception(f"Page not found (404). URL may be incorrect.")
+                elif response.status_code >= 400:
+                    raise Exception(f"HTTP {response.status_code}: {response.reason_phrase}")
+                
+                response.raise_for_status()  # Raise for other status codes
+                
+                # Check content type
+                content_type = response.headers.get('content-type', '').lower()
+                if 'html' not in content_type:
+                    logger.warning(f"Non-HTML content type: {content_type}")
+                
+                return response.text, "static"
+                
+        except httpx.HTTPStatusError as e:
+            # HTTP error status codes (4xx, 5xx)
+            status_code = e.response.status_code
+            logger.error(f"HTTP error {status_code} for {url}")
+            raise Exception(f"HTTP {status_code}: {e.response.reason_phrase}")
+            
+        except httpx.ConnectError as e:
+            # Connection failed
+            logger.error(f"Connection failed for {url}: {str(e)}")
+            raise Exception(f"Connection failed. Check firewall/network settings or try Playwright mode.")
+            
+        except httpx.TimeoutException as e:
+            # Request timeout
+            logger.error(f"Timeout for {url}")
+            raise Exception(f"Request timeout after {self.timeout} seconds")
+            
+        except httpx.TooManyRedirects as e:
+            # Too many redirects
+            logger.error(f"Too many redirects for {url}")
+            raise Exception(f"Too many redirects")
+            
+        except Exception as e:
+            # Other errors
+            logger.error(f"Static scrape error for {url}: {str(e)}")
+            raise
+
+        
     async def _js_scrape(self, url: str) -> tuple[List[str], Dict]:
         """Scrape using Playwright via subprocess (Windows fix)"""
         import subprocess
@@ -404,35 +523,57 @@ class UniversalScraper:
                 [sys.executable, "app/playwright_helper.py", url, str(self.max_scrolls)],
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=90
             )
             
             if result.returncode != 0:
+                logger.error(f"Playwright stderr: {result.stderr}")
                 raise Exception(f"Playwright subprocess failed: {result.stderr}")
             
+            # Log stderr for debugging
+            if result.stderr:
+                logger.info(f"Playwright logs:\n{result.stderr}")
+            
             # Parse result
-            data = json.loads(result.stdout)
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON. Output: {result.stdout[:500]}")
+                raise Exception(f"Failed to parse Playwright output: {e}")
             
             if not data.get("success"):
                 raise Exception(data.get("error", "Unknown error"))
             
             html_pages = data["html_pages"]
-            interactions.update(data["interactions"])
+            pw_interactions = data["interactions"]
             
-            logger.info(f"Playwright subprocess: {len(html_pages)} pages, {interactions['scrolls']} scrolls")
+            # Format clicks for better display
+            formatted_clicks = []
+            for click in pw_interactions.get("clicks", []):
+                if isinstance(click, dict):
+                    formatted_clicks.append(
+                        f"{click['selector']}[{click['index']}]: {click['text']}"
+                    )
+                else:
+                    formatted_clicks.append(click)
+            
+            interactions["clicks"] = formatted_clicks
+            interactions["scrolls"] = pw_interactions.get("scrolls", 0)
+            interactions["pages"] = pw_interactions.get("pages", [url])
+            
+            logger.info(f"Playwright subprocess: {len(html_pages)} pages, "
+                       f"{len(formatted_clicks)} clicks, {interactions['scrolls']} scrolls")
             
             return html_pages, interactions
             
         except subprocess.TimeoutExpired:
             logger.error("Playwright subprocess timeout")
             raise Exception("Playwright timeout")
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Playwright output: {e}")
-            raise Exception("Failed to parse Playwright result")
         except Exception as e:
             logger.error(f"Playwright subprocess error: {str(e)}")
             raise
-    
+
+
     async def _remove_noise(self, page):
         """Remove common noise elements"""
         noise_selectors = [
