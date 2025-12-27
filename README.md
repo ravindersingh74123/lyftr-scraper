@@ -247,18 +247,3 @@ pytest
 ### Debug Mode
 The server runs with `--reload` flag by default, which auto-reloads on code changes.
 
-## Contributing
-
-This is an assignment project, but suggestions are welcome!
-
-## License
-
-MIT License (or as specified by Lyftr AI)
-
-## Contact
-
-For questions about this assignment, contact: careers@lyftr.ai
-
----
-
-**Built for Lyftr AI Full-Stack Assignment**
