@@ -121,16 +121,3 @@ lyftr-scraper/
 5. ✅ Review the JSON output
 6. ✅ Check `design_notes.md` for implementation details
 
-## For Submission
-
-Before submitting to Lyftr AI:
-
-1. ✅ Test all three primary URLs
-2. ✅ Verify `capabilities.json` is accurate
-3. ✅ Update `README.md` with your specific test results
-4. ✅ Push to GitHub
-5. ✅ Email careers@lyftr.ai with subject: "Full-Stack Assignment – [Your Name]"
-
-## Support
-
-For issues specific to this assignment, contact: careers@lyftr.ai
