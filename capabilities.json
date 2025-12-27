@@ -1,0 +1,20 @@
+{
+  "static_scraping": true,
+  "js_rendering": true,
+  "click_tabs": true,
+  "load_more_clicks": true,
+  "infinite_scroll": true,
+  "pagination_links": true,
+  "noise_filtering": true,
+  "html_truncation": true,
+  "metadata_extraction": true,
+  "section_grouping": true,
+  "absolute_urls": true,
+  "error_handling": true,
+  "interaction_tracking": true,
+  "depth_three_or_more": true,
+  "frontend_json_viewer": true,
+  "download_json": true,
+  "responsive_ui": true,
+  "loading_states": true
+}
