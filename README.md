@@ -2,6 +2,20 @@
 
 A robust, full-stack web scraping application that intelligently extracts structured data from any website, seamlessly handling both static HTML and JavaScript-rendered content with advanced interaction capabilities.
 
+
+## 🌟 Websites to Test
+
+https://en.wikipedia.org/wiki/Artificial_intelligence \
+https://news.ycombinator.com/ \
+https://vercel.com/ \
+https://infinite-scroll.com/demo/full-page/
+
+
+## 🌟 Screenshots
+<img width="1454" height="455" alt="image" src="https://github.com/user-attachments/assets/b91649a9-06ea-40aa-ab11-f4253616b1f2" />
+
+<img width="1896" height="912" alt="image" src="https://github.com/user-attachments/assets/1c59a61a-5bea-4cb0-8f58-edef4b3aa676" />
+
 ## 🌟 Features
 
 ### Core Capabilities
