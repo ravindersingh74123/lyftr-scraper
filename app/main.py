@@ -76,7 +76,7 @@ async def root():
             
             body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: linear-gradient(135deg, #3a1c71 0%, #5f2c82 50%, #6a3093 100%);
                 min-height: 100vh;
                 padding: 20px;
             }
@@ -218,6 +218,33 @@ async def root():
                 color: #333;
             }
             
+            .strategy-badge {
+                display: inline-block;
+                background: #667eea;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 12px;
+                font-size: 12px;
+                font-weight: 600;
+                margin-left: 10px;
+            }
+            
+            .strategy-badge.static {
+                background: #10b981;
+            }
+            
+            .strategy-badge.js {
+                background: #f59e0b;
+            }
+            
+            .strategy-badge.static-fallback {
+                background: #8b5cf6;
+            }
+            
+            .strategy-badge.static-paginated {
+                background: #06b6d4;
+            }
+            
             .sections-container {
                 margin-top: 20px;
             }
@@ -323,7 +350,7 @@ async def root():
                         type="text" 
                         id="urlInput" 
                         placeholder="Enter URL (e.g., https://example.com)"
-                        value="https://en.wikipedia.org/wiki/Artificial_intelligence"
+                        value="https://books.toscrape.com/catalogue/page-1.html"
                     >
                     <button onclick="scrapeUrl()" id="scrapeBtn">Scrape</button>
                 </div>
@@ -401,12 +428,17 @@ async def root():
             }
             
             function displayResults(result) {
-                // Display meta information
+                // Get strategy and format badge
+                const strategy = result.meta.strategy || 'unknown';
+                const strategyBadge = `<span class="strategy-badge ${strategy}">${strategy}</span>`;
+                
+                // Display meta information with strategy
                 const metaHtml = `
                     <h3>📄 Page Metadata</h3>
                     <div class="meta-item"><strong>Title:</strong> ${result.meta.title || 'N/A'}</div>
                     <div class="meta-item"><strong>Description:</strong> ${result.meta.description || 'N/A'}</div>
                     <div class="meta-item"><strong>Language:</strong> ${result.meta.language || 'N/A'}</div>
+                    <div class="meta-item"><strong>Strategy:</strong> ${strategyBadge}</div>
                     <div class="meta-item"><strong>URL:</strong> ${result.url}</div>
                     <div class="meta-item"><strong>Scraped At:</strong> ${new Date(result.scrapedAt).toLocaleString()}</div>
                 `;

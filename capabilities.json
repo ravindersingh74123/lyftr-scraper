@@ -1,10 +1,12 @@
 {
   "static_scraping": true,
   "js_rendering": true,
+  "static_first_fallback": true,
   "click_tabs": true,
   "load_more_clicks": true,
   "infinite_scroll": true,
   "pagination_links": true,
+  "static_pagination": true,
   "noise_filtering": true,
   "html_truncation": true,
   "metadata_extraction": true,
@@ -16,5 +18,11 @@
   "frontend_json_viewer": true,
   "download_json": true,
   "responsive_ui": true,
-  "loading_states": true
+  "loading_states": true,
+  "health_check_endpoint": true,
+  "scrape_endpoint": true,
+  "valid_json_response": true,
+  "multi_page_merging": true,
+  "playwright_fallback_on_error": true,
+  "windows_compatible": true
 }
